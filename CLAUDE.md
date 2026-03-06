@@ -69,6 +69,16 @@ Requirements:
 - The archive must summarize goals, changed files, key implementation details, verification results, and any new conventions from that work.
 - Treat this as a required post-change step for future modifications.
 
+## Service Management Discipline
+
+On Linux, this install is currently managed by the system-level systemd unit at `/etc/systemd/system/nanoclaw.service`, not by ad-hoc `nohup` runs.
+
+Rules:
+- Do not start additional NanoClaw instances manually with `nohup node dist/index.js` when the systemd service is enabled.
+- Before debugging duplicate Telegram replies or `409 Conflict: terminated by other getUpdates request`, check for multiple `dist/index.js` processes and verify `systemctl status nanoclaw`.
+- When restarting on this machine, prefer `systemctl restart nanoclaw` and keep exactly one main NanoClaw process alive.
+- If a manual debug instance was started, stop it before returning the service to normal operation.
+
 ## Container Build Cache
 
 The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.
