@@ -46,12 +46,42 @@ export interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  resultSource?: 'agent_sdk' | 'compatible_api';
 }
 
 interface VolumeMount {
   hostPath: string;
   containerPath: string;
   readonly: boolean;
+}
+
+function syncDirectoryIfSourceNewer(sourceDir: string, targetDir: string): void {
+  if (!fs.existsSync(sourceDir)) return;
+
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+
+    if (entry.isDirectory()) {
+      syncDirectoryIfSourceNewer(sourcePath, targetPath);
+      continue;
+    }
+
+    if (!entry.isFile()) continue;
+
+    if (!fs.existsSync(targetPath)) {
+      fs.copyFileSync(sourcePath, targetPath);
+      continue;
+    }
+
+    const sourceStat = fs.statSync(sourcePath);
+    const targetStat = fs.statSync(targetPath);
+    if (sourceStat.mtimeMs > targetStat.mtimeMs) {
+      fs.copyFileSync(sourcePath, targetPath);
+    }
+  }
 }
 
 function buildVolumeMounts(
@@ -120,6 +150,16 @@ function buildVolumeMounts(
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
+  fs.chmodSync(groupSessionsDir, 0o777);
+  const debugDir = path.join(groupSessionsDir, 'debug');
+  const backupsDir = path.join(groupSessionsDir, 'backups');
+  const pluginsDir = path.join(groupSessionsDir, 'plugins');
+  fs.mkdirSync(debugDir, { recursive: true });
+  fs.mkdirSync(backupsDir, { recursive: true });
+  fs.mkdirSync(pluginsDir, { recursive: true });
+  fs.chmodSync(debugDir, 0o777);
+  fs.chmodSync(backupsDir, 0o777);
+  fs.chmodSync(pluginsDir, 0o777);
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     fs.writeFileSync(
@@ -147,6 +187,8 @@ function buildVolumeMounts(
   // Sync skills from container/skills/ into each group's .claude/skills/
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
+  fs.mkdirSync(skillsDst, { recursive: true });
+  fs.chmodSync(skillsDst, 0o777);
   if (fs.existsSync(skillsSrc)) {
     for (const skillDir of fs.readdirSync(skillsSrc)) {
       const srcDir = path.join(skillsSrc, skillDir);
@@ -164,9 +206,14 @@ function buildVolumeMounts(
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
+  fs.mkdirSync(groupIpcDir, { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
+  fs.chmodSync(groupIpcDir, 0o777);
+  fs.chmodSync(path.join(groupIpcDir, 'messages'), 0o777);
+  fs.chmodSync(path.join(groupIpcDir, 'tasks'), 0o777);
+  fs.chmodSync(path.join(groupIpcDir, 'input'), 0o777);
   mounts.push({
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
@@ -188,8 +235,8 @@ function buildVolumeMounts(
     group.folder,
     'agent-runner-src',
   );
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+  if (fs.existsSync(agentRunnerSrc)) {
+    syncDirectoryIfSourceNewer(agentRunnerSrc, groupAgentRunnerDir);
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,
@@ -215,12 +262,25 @@ function buildVolumeMounts(
  * Secrets are never written to disk or mounted as files.
  */
 function readSecrets(): Record<string, string> {
-  return readEnvFile([
+  const envFileSecrets = readEnvFile([
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_API_KEY',
     'ANTHROPIC_BASE_URL',
     'ANTHROPIC_AUTH_TOKEN',
+    'ANTHROPIC_MODEL',
   ]);
+
+  return {
+    ...envFileSecrets,
+    ANTHROPIC_API_URL:
+      process.env.ANTHROPIC_API_URL ||
+      envFileSecrets.ANTHROPIC_API_URL ||
+      envFileSecrets.ANTHROPIC_BASE_URL,
+    ANTHROPIC_CUSTOM_HEADERS:
+      process.env.ANTHROPIC_CUSTOM_HEADERS || envFileSecrets.ANTHROPIC_CUSTOM_HEADERS,
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    DISABLE_AUTOUPDATER: '1',
+  };
 }
 
 function buildContainerArgs(

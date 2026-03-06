@@ -16,6 +16,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import Anthropic from '@anthropic-ai/sdk';
 import { query, HookCallback, PreCompactHookInput, PreToolUseHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
@@ -35,6 +36,7 @@ interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  resultSource?: 'agent_sdk' | 'compatible_api';
 }
 
 interface SessionEntry {
@@ -47,6 +49,20 @@ interface SessionEntry {
 interface SessionsIndex {
   entries: SessionEntry[];
 }
+
+interface QueryFailureContext {
+  sessionId?: string;
+  resumeAt?: string;
+  envPresence: Record<string, boolean>;
+}
+
+const COMPATIBLE_ENDPOINT_ENV_KEYS = [
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_API_URL',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_MODEL',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+] as const;
 
 interface SDKUserMessage {
   type: 'user';
@@ -116,6 +132,92 @@ function writeOutput(output: ContainerOutput): void {
 
 function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.stack || `${error.name}: ${error.message}`;
+  }
+
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function getCompatibleModeEnvPresence(env: Record<string, string | undefined>): Record<string, boolean> {
+  return Object.fromEntries(
+    COMPATIBLE_ENDPOINT_ENV_KEYS.map(key => [key, Boolean(env[key])]),
+  );
+}
+
+function isCompatibleEndpointMode(env: Record<string, string | undefined>): boolean {
+  const hasCompatibleEndpoint = Boolean(env.ANTHROPIC_BASE_URL || env.ANTHROPIC_API_URL);
+  const hasClaudeCodeOauth = Boolean(env.CLAUDE_CODE_OAUTH_TOKEN);
+  return hasCompatibleEndpoint && !hasClaudeCodeOauth;
+}
+
+function buildQueryFailureSummary(error: unknown, context: QueryFailureContext): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return [
+    `query() failed: ${message}`,
+    `resume=${context.sessionId || 'none'}`,
+    `resumeAt=${context.resumeAt || 'none'}`,
+    `env=${Object.entries(context.envPresence)
+      .map(([key, present]) => `${key}=${present ? 'set' : 'unset'}`)
+      .join(',')}`,
+  ].join(' | ');
+}
+
+function extractTextFromMessageContent(content: Anthropic.Message['content']): string {
+  return content
+    .filter(block => block.type === 'text')
+    .map(block => block.text)
+    .join('')
+    .trim();
+}
+
+async function runCompatibleEndpointQuery(
+  prompt: string,
+  sdkEnv: Record<string, string | undefined>,
+): Promise<{ result: string }> {
+  const apiKey = sdkEnv.ANTHROPIC_AUTH_TOKEN || sdkEnv.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error('Compatible endpoint mode requires ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY');
+  }
+
+  const baseURL = sdkEnv.ANTHROPIC_BASE_URL || sdkEnv.ANTHROPIC_API_URL;
+  if (!baseURL) {
+    throw new Error('Compatible endpoint mode requires ANTHROPIC_BASE_URL or ANTHROPIC_API_URL');
+  }
+
+  const model = sdkEnv.ANTHROPIC_MODEL || 'claude-opus-4-6';
+  const client = new Anthropic({
+    apiKey,
+    baseURL,
+    maxRetries: 2,
+    defaultHeaders: sdkEnv.ANTHROPIC_CUSTOM_HEADERS
+      ? JSON.parse(sdkEnv.ANTHROPIC_CUSTOM_HEADERS) as Record<string, string>
+      : undefined,
+  });
+
+  const response = await client.messages.create({
+    model,
+    max_tokens: 4096,
+    messages: [{ role: 'user', content: prompt }],
+  });
+
+  const result = extractTextFromMessageContent(response.content);
+  if (!result) {
+    throw new Error('Compatible endpoint response did not contain text content');
+  }
+
+  return { result };
 }
 
 function getSessionSummary(sessionId: string, transcriptPath: string): string | null {
@@ -362,6 +464,24 @@ async function runQuery(
   sdkEnv: Record<string, string | undefined>,
   resumeAt?: string,
 ): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
+  const compatibleMode = isCompatibleEndpointMode(sdkEnv);
+  log(
+    compatibleMode
+      ? 'Compatible endpoint mode enabled; using Messages API fallback'
+      : 'Claude Code mode enabled; using Agent SDK query() path',
+  );
+
+  if (compatibleMode) {
+    const result = await runCompatibleEndpointQuery(prompt, sdkEnv);
+    writeOutput({
+      status: 'success',
+      result: result.result,
+      newSessionId: sessionId,
+      resultSource: 'compatible_api',
+    });
+    return { newSessionId: sessionId, lastAssistantUuid: undefined, closedDuringQuery: false };
+  }
+
   const stream = new MessageStream();
   stream.push(prompt);
 
@@ -414,75 +534,87 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
-  for await (const message of query({
-    prompt: stream,
-    options: {
-      cwd: '/workspace/group',
-      additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
-      resume: sessionId,
-      resumeSessionAt: resumeAt,
-      systemPrompt: globalClaudeMd
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
-        : undefined,
-      allowedTools: [
-        'Bash',
-        'Read', 'Write', 'Edit', 'Glob', 'Grep',
-        'WebSearch', 'WebFetch',
-        'Task', 'TaskOutput', 'TaskStop',
-        'TeamCreate', 'TeamDelete', 'SendMessage',
-        'TodoWrite', 'ToolSearch', 'Skill',
-        'NotebookEdit',
-        'mcp__nanoclaw__*'
-      ],
-      env: sdkEnv,
-      permissionMode: 'bypassPermissions',
-      allowDangerouslySkipPermissions: true,
-      settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+  try {
+    for await (const message of query({
+      prompt: stream,
+      options: {
+        cwd: '/workspace/group',
+        additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
+        resume: sessionId,
+        resumeSessionAt: resumeAt,
+        systemPrompt: globalClaudeMd
+          ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
+          : undefined,
+        allowedTools: [
+          'Bash',
+          'Read', 'Write', 'Edit', 'Glob', 'Grep',
+          'WebSearch', 'WebFetch',
+          'Task', 'TaskOutput', 'TaskStop',
+          'TeamCreate', 'TeamDelete', 'SendMessage',
+          'TodoWrite', 'ToolSearch', 'Skill',
+          'NotebookEdit',
+          'mcp__nanoclaw__*'
+        ],
+        env: sdkEnv,
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+        settingSources: ['project', 'user'],
+        mcpServers: {
+          nanoclaw: {
+            command: 'node',
+            args: [mcpServerPath],
+            env: {
+              NANOCLAW_CHAT_JID: containerInput.chatJid,
+              NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+              NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+            },
           },
         },
-      },
-      hooks: {
-        PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
-        PreToolUse: [{ matcher: 'Bash', hooks: [createSanitizeBashHook()] }],
-      },
-    }
-  })) {
-    messageCount++;
-    const msgType = message.type === 'system' ? `system/${(message as { subtype?: string }).subtype}` : message.type;
-    log(`[msg #${messageCount}] type=${msgType}`);
+        hooks: {
+          PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
+          PreToolUse: [{ matcher: 'Bash', hooks: [createSanitizeBashHook()] }],
+        },
+      }
+    })) {
+      messageCount++;
+      const msgType = message.type === 'system' ? `system/${(message as { subtype?: string }).subtype}` : message.type;
+      log(`[msg #${messageCount}] type=${msgType}`);
 
-    if (message.type === 'assistant' && 'uuid' in message) {
-      lastAssistantUuid = (message as { uuid: string }).uuid;
-    }
+      if (message.type === 'assistant' && 'uuid' in message) {
+        lastAssistantUuid = (message as { uuid: string }).uuid;
+      }
 
-    if (message.type === 'system' && message.subtype === 'init') {
-      newSessionId = message.session_id;
-      log(`Session initialized: ${newSessionId}`);
-    }
+      if (message.type === 'system' && message.subtype === 'init') {
+        newSessionId = message.session_id;
+        log(`Session initialized: ${newSessionId}`);
+      }
 
-    if (message.type === 'system' && (message as { subtype?: string }).subtype === 'task_notification') {
-      const tn = message as { task_id: string; status: string; summary: string };
-      log(`Task notification: task=${tn.task_id} status=${tn.status} summary=${tn.summary}`);
-    }
+      if (message.type === 'system' && (message as { subtype?: string }).subtype === 'task_notification') {
+        const tn = message as { task_id: string; status: string; summary: string };
+        log(`Task notification: task=${tn.task_id} status=${tn.status} summary=${tn.summary}`);
+      }
 
-    if (message.type === 'result') {
-      resultCount++;
-      const textResult = 'result' in message ? (message as { result?: string }).result : null;
-      log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
-      writeOutput({
-        status: 'success',
-        result: textResult || null,
-        newSessionId
-      });
+      if (message.type === 'result') {
+        resultCount++;
+        const textResult = 'result' in message ? (message as { result?: string }).result : null;
+        log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
+        writeOutput({
+          status: 'success',
+          result: textResult || null,
+          newSessionId,
+          resultSource: 'agent_sdk',
+        });
+      }
     }
+  } catch (error) {
+    const context: QueryFailureContext = {
+      sessionId,
+      resumeAt,
+      envPresence: getCompatibleModeEnvPresence(sdkEnv),
+    };
+    log(`query() threw error: ${formatError(error)}`);
+    log(`query() context: ${JSON.stringify(context)}`);
+    throw new Error(buildQueryFailureSummary(error, context));
   }
 
   ipcPolling = false;
@@ -557,9 +689,8 @@ async function main(): Promise<void> {
         break;
       }
 
-      // Emit session update so host can track it
-      writeOutput({ status: 'success', result: null, newSessionId: sessionId });
-
+      // Query finished; keep the latest session in-process and wait for IPC.
+      // Do not emit an extra success marker with result:null.
       log('Query ended, waiting for next IPC message...');
 
       // Wait for the next message or _close sentinel
@@ -573,8 +704,9 @@ async function main(): Promise<void> {
       prompt = nextMessage;
     }
   } catch (err) {
+    const errorDetails = formatError(err);
     const errorMessage = err instanceof Error ? err.message : String(err);
-    log(`Agent error: ${errorMessage}`);
+    log(`Agent error: ${errorDetails}`);
     writeOutput({
       status: 'error',
       result: null,

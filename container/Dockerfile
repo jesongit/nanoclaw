@@ -3,6 +3,11 @@
 
 FROM node:22-slim
 
+# Install curl first, then use chsrc to switch Debian and npm to domestic mirrors
+RUN apt-get update && apt-get install -y curl ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN if ! command -v chsrc >/dev/null 2>&1; then curl https://gitee.com/RubyMetric/chsrc/raw/main/tool/installer.sh | bash; fi
+RUN chsrc set debian && chsrc set npm
+
 # Install system dependencies for Chromium
 RUN apt-get update && apt-get install -y \
     chromium \
@@ -22,7 +27,6 @@ RUN apt-get update && apt-get install -y \
     libcups2 \
     libdrm2 \
     libxshmfence1 \
-    curl \
     git \
     && rm -rf /var/lib/apt/lists/*
 
@@ -49,7 +53,7 @@ COPY agent-runner/ ./
 RUN npm run build
 
 # Create workspace directories
-RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/messages /workspace/ipc/tasks /workspace/ipc/input
+RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/messages /workspace/ipc/tasks /workspace/ipc/input /home/node/.claude/debug
 
 # Create entrypoint script
 # Secrets are passed via stdin JSON — temp file is deleted immediately after Node reads it
