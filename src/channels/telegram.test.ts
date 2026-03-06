@@ -222,7 +222,11 @@ describe('TelegramChannel', () => {
 
     it('passes apiRoot to grammy when configured', async () => {
       const opts = createTestOpts();
-      const channel = new TelegramChannel('test-token', opts, 'https://tg.pid.im');
+      const channel = new TelegramChannel(
+        'test-token',
+        opts,
+        'https://tg.pid.im',
+      );
 
       await channel.connect();
 

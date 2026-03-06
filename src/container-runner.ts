@@ -55,7 +55,17 @@ interface VolumeMount {
   readonly: boolean;
 }
 
-function syncDirectoryIfSourceNewer(sourceDir: string, targetDir: string): void {
+function ensureDirectoryWithPermissions(dirPath: string): void {
+  fs.mkdirSync(dirPath, { recursive: true });
+  if (fs.existsSync(dirPath)) {
+    fs.chmodSync(dirPath, 0o777);
+  }
+}
+
+function syncDirectoryIfSourceNewer(
+  sourceDir: string,
+  targetDir: string,
+): void {
   if (!fs.existsSync(sourceDir)) return;
 
   fs.mkdirSync(targetDir, { recursive: true });
@@ -149,17 +159,13 @@ function buildVolumeMounts(
     group.folder,
     '.claude',
   );
-  fs.mkdirSync(groupSessionsDir, { recursive: true });
-  fs.chmodSync(groupSessionsDir, 0o777);
+  ensureDirectoryWithPermissions(groupSessionsDir);
   const debugDir = path.join(groupSessionsDir, 'debug');
   const backupsDir = path.join(groupSessionsDir, 'backups');
   const pluginsDir = path.join(groupSessionsDir, 'plugins');
-  fs.mkdirSync(debugDir, { recursive: true });
-  fs.mkdirSync(backupsDir, { recursive: true });
-  fs.mkdirSync(pluginsDir, { recursive: true });
-  fs.chmodSync(debugDir, 0o777);
-  fs.chmodSync(backupsDir, 0o777);
-  fs.chmodSync(pluginsDir, 0o777);
+  ensureDirectoryWithPermissions(debugDir);
+  ensureDirectoryWithPermissions(backupsDir);
+  ensureDirectoryWithPermissions(pluginsDir);
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     fs.writeFileSync(
@@ -187,8 +193,7 @@ function buildVolumeMounts(
   // Sync skills from container/skills/ into each group's .claude/skills/
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
-  fs.mkdirSync(skillsDst, { recursive: true });
-  fs.chmodSync(skillsDst, 0o777);
+  ensureDirectoryWithPermissions(skillsDst);
   if (fs.existsSync(skillsSrc)) {
     for (const skillDir of fs.readdirSync(skillsSrc)) {
       const srcDir = path.join(skillsSrc, skillDir);
@@ -206,14 +211,13 @@ function buildVolumeMounts(
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
-  fs.mkdirSync(groupIpcDir, { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
-  fs.chmodSync(groupIpcDir, 0o777);
-  fs.chmodSync(path.join(groupIpcDir, 'messages'), 0o777);
-  fs.chmodSync(path.join(groupIpcDir, 'tasks'), 0o777);
-  fs.chmodSync(path.join(groupIpcDir, 'input'), 0o777);
+  ensureDirectoryWithPermissions(groupIpcDir);
+  const groupIpcMessagesDir = path.join(groupIpcDir, 'messages');
+  const groupIpcTasksDir = path.join(groupIpcDir, 'tasks');
+  const groupIpcInputDir = path.join(groupIpcDir, 'input');
+  ensureDirectoryWithPermissions(groupIpcMessagesDir);
+  ensureDirectoryWithPermissions(groupIpcTasksDir);
+  ensureDirectoryWithPermissions(groupIpcInputDir);
   mounts.push({
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
@@ -277,7 +281,8 @@ function readSecrets(): Record<string, string> {
       envFileSecrets.ANTHROPIC_API_URL ||
       envFileSecrets.ANTHROPIC_BASE_URL,
     ANTHROPIC_CUSTOM_HEADERS:
-      process.env.ANTHROPIC_CUSTOM_HEADERS || envFileSecrets.ANTHROPIC_CUSTOM_HEADERS,
+      process.env.ANTHROPIC_CUSTOM_HEADERS ||
+      envFileSecrets.ANTHROPIC_CUSTOM_HEADERS,
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     DISABLE_AUTOUPDATER: '1',
   };

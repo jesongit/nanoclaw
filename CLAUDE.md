@@ -59,6 +59,16 @@ systemctl --user restart nanoclaw
 
 **WhatsApp not connecting after upgrade:** WhatsApp is now a separate skill, not bundled in core. Run `/add-whatsapp` (or `npx tsx scripts/apply-skill.ts .claude/skills/add-whatsapp && npm run build`) to install it. Existing auth credentials and groups are preserved.
 
+## Change Archive
+
+Every time code changes are made in this repository, create or update a summary file under `change-archive/` at the project root.
+
+Requirements:
+- Folder: `change-archive/`
+- File name format: `YYYY-MM-DD.md`
+- The archive must summarize goals, changed files, key implementation details, verification results, and any new conventions from that work.
+- Treat this as a required post-change step for future modifications.
+
 ## Container Build Cache
 
 The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.
