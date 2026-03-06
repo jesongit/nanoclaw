@@ -7,6 +7,7 @@ on:
 
 jobs:
   bump-version:
+    if: ${{ secrets.APP_ID != '' && secrets.APP_PRIVATE_KEY != '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/create-github-app-token@v1
