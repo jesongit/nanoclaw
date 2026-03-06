@@ -8,24 +8,39 @@ on:
 
 jobs:
   update-tokens:
-    if: ${{ secrets.APP_ID != '' && secrets.APP_PRIVATE_KEY != '' }}
     runs-on: ubuntu-latest
     steps:
+      - name: Check GitHub App secrets
+        id: app-secrets
+        env:
+          APP_ID: ${{ secrets.APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "$APP_ID" ] && [ -n "$APP_PRIVATE_KEY" ]; then
+            echo "has_app_secrets=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_app_secrets=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/create-github-app-token@v1
+        if: steps.app-secrets.outputs.has_app_secrets == 'true'
         id: app-token
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - uses: actions/checkout@v4
+        if: steps.app-secrets.outputs.has_app_secrets == 'true'
         with:
           token: ${{ steps.app-token.outputs.token }}
 
       - uses: actions/setup-python@v5
+        if: steps.app-secrets.outputs.has_app_secrets == 'true'
         with:
           python-version: '3.12'
 
       - uses: ./repo-tokens
+        if: steps.app-secrets.outputs.has_app_secrets == 'true'
         id: tokens
         with:
           include: 'src/**/*.ts container/agent-runner/src/**/*.ts container/Dockerfile container/build.sh launchd/com.nanoclaw.plist CLAUDE.md'
@@ -33,6 +48,7 @@ jobs:
           badge-path: 'repo-tokens/badge.svg'
 
       - name: Commit if changed
+        if: steps.app-secrets.outputs.has_app_secrets == 'true'
         run: |
           git add README.md repo-tokens/badge.svg
           git diff --cached --quiet && exit 0
@@ -41,3 +57,7 @@ jobs:
           git commit -m "docs: update token count to ${{ steps.tokens.outputs.badge }}"
           git pull --rebase
           git push
+
+      - name: Skip when GitHub App secrets are missing
+        if: steps.app-secrets.outputs.has_app_secrets != 'true'
+        run: echo "Skipping update-tokens because APP_ID or APP_PRIVATE_KEY is not configured."
