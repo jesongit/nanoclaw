@@ -14,6 +14,42 @@ import {
 
 let db: Database.Database;
 
+function getTimestampEpochSql(value: string): string {
+  return `julianday(${value})`;
+}
+
+function compareAbsoluteTimestampSql(left: string, right: string): string {
+  const leftEpoch = getTimestampEpochSql(left);
+  const rightEpoch = getTimestampEpochSql(right);
+
+  return `
+    CASE
+      WHEN ${left} IS NULL AND ${right} IS NULL THEN 0
+      WHEN ${left} IS NULL THEN -1
+      WHEN ${right} IS NULL THEN 1
+      WHEN ${leftEpoch} IS NOT NULL AND ${rightEpoch} IS NOT NULL THEN
+        CASE
+          WHEN ${leftEpoch} > ${rightEpoch} THEN 1
+          WHEN ${leftEpoch} < ${rightEpoch} THEN -1
+          ELSE 0
+        END
+      WHEN ${leftEpoch} IS NOT NULL THEN 1
+      WHEN ${rightEpoch} IS NOT NULL THEN -1
+      WHEN ${left} > ${right} THEN 1
+      WHEN ${left} < ${right} THEN -1
+      ELSE 0
+    END
+  `;
+}
+
+function buildTimestampOrderSql(
+  value: string,
+  direction: 'ASC' | 'DESC',
+): string {
+  const epoch = getTimestampEpochSql(value);
+  return `CASE WHEN ${epoch} IS NULL THEN 1 ELSE 0 END ASC, ${epoch} ${direction}, ${value} ${direction}`;
+}
+
 function createSchema(database: Database.Database): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS chats (
@@ -179,10 +215,14 @@ export function storeChatMetadata(
       INSERT INTO chats (jid, name, last_message_time, channel, is_group) VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(jid) DO UPDATE SET
         name = excluded.name,
-        last_message_time = MAX(last_message_time, excluded.last_message_time),
+        last_message_time = CASE
+          WHEN ${compareAbsoluteTimestampSql('excluded.last_message_time', 'chats.last_message_time')} >= 0
+            THEN excluded.last_message_time
+          ELSE chats.last_message_time
+        END,
         channel = COALESCE(excluded.channel, channel),
         is_group = COALESCE(excluded.is_group, is_group)
-    `,
+`,
     ).run(chatJid, name, timestamp, ch, group);
   } else {
     // Update timestamp only, preserve existing name if any
@@ -190,10 +230,14 @@ export function storeChatMetadata(
       `
       INSERT INTO chats (jid, name, last_message_time, channel, is_group) VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(jid) DO UPDATE SET
-        last_message_time = MAX(last_message_time, excluded.last_message_time),
+        last_message_time = CASE
+          WHEN ${compareAbsoluteTimestampSql('excluded.last_message_time', 'chats.last_message_time')} >= 0
+            THEN excluded.last_message_time
+          ELSE chats.last_message_time
+        END,
         channel = COALESCE(excluded.channel, channel),
         is_group = COALESCE(excluded.is_group, is_group)
-    `,
+`,
     ).run(chatJid, chatJid, timestamp, ch, group);
   }
 }
@@ -229,7 +273,7 @@ export function getAllChats(): ChatInfo[] {
       `
     SELECT jid, name, last_message_time, channel, is_group
     FROM chats
-    ORDER BY last_message_time DESC
+    ORDER BY ${buildTimestampOrderSql('last_message_time', 'DESC')}
   `,
     )
     .all() as ChatInfo[];
@@ -309,28 +353,35 @@ export function getNewMessages(
 ): { messages: NewMessage[]; newTimestamp: string } {
   if (jids.length === 0) return { messages: [], newTimestamp: lastTimestamp };
 
-  const placeholders = jids.map(() => '?').join(',');
+  const jidBindings = Object.fromEntries(
+    jids.map((jid, index) => [`jid${index}`, jid]),
+  );
+  const placeholders = Object.keys(jidBindings)
+    .map((key) => `@${key}`)
+    .join(',');
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
   const sql = `
     SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
     FROM messages
-    WHERE timestamp > ? AND chat_jid IN (${placeholders})
-      AND is_bot_message = 0 AND content NOT LIKE ?
+    WHERE ${compareAbsoluteTimestampSql('timestamp', '@lastTimestamp')} > 0
+      AND chat_jid IN (${placeholders})
+      AND is_bot_message = 0 AND content NOT LIKE @botPrefix
       AND content != '' AND content IS NOT NULL
-    ORDER BY timestamp
+    ORDER BY ${buildTimestampOrderSql('timestamp', 'ASC')}
   `;
 
-  const rows = db
-    .prepare(sql)
-    .all(lastTimestamp, ...jids, `${botPrefix}:%`) as NewMessage[];
+  const rows = db.prepare(sql).all({
+    lastTimestamp,
+    botPrefix: `${botPrefix}:%`,
+    ...jidBindings,
+  }) as NewMessage[];
 
-  let newTimestamp = lastTimestamp;
-  for (const row of rows) {
-    if (row.timestamp > newTimestamp) newTimestamp = row.timestamp;
-  }
-
-  return { messages: rows, newTimestamp };
+  return {
+    messages: rows,
+    newTimestamp:
+      rows.length > 0 ? rows[rows.length - 1].timestamp : lastTimestamp,
+  };
 }
 
 export function getMessagesSince(
@@ -343,14 +394,17 @@ export function getMessagesSince(
   const sql = `
     SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
     FROM messages
-    WHERE chat_jid = ? AND timestamp > ?
-      AND is_bot_message = 0 AND content NOT LIKE ?
+    WHERE chat_jid = @chatJid
+      AND ${compareAbsoluteTimestampSql('timestamp', '@sinceTimestamp')} > 0
+      AND is_bot_message = 0 AND content NOT LIKE @botPrefix
       AND content != '' AND content IS NOT NULL
-    ORDER BY timestamp
+    ORDER BY ${buildTimestampOrderSql('timestamp', 'ASC')}
   `;
-  return db
-    .prepare(sql)
-    .all(chatJid, sinceTimestamp, `${botPrefix}:%`) as NewMessage[];
+  return db.prepare(sql).all({
+    chatJid,
+    sinceTimestamp,
+    botPrefix: `${botPrefix}:%`,
+  }) as NewMessage[];
 }
 
 export function createTask(

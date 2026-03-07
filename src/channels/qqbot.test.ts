@@ -443,6 +443,36 @@ describe('QQBotChannel', () => {
 
       await channel.disconnect();
     });
+
+    it('normalizes inbound timestamps to UTC ISO format', async () => {
+      const opts = createTestOpts();
+      const channel = new QQBotChannel(
+        'app_123',
+        'secret_123',
+        opts,
+        '127.0.0.1',
+        0,
+      );
+      await channel.connect();
+
+      const payload = createDmEvent({ timestamp: '2026-03-07T09:00:00+08:00' });
+      const body = JSON.stringify(payload);
+      await postWebhook(channel, payload, signedHeaders('secret_123', body));
+
+      expect(opts.onChatMetadata).toHaveBeenCalledWith(
+        'qqdm:user_001',
+        '2026-03-07T01:00:00.000Z',
+        'Alice',
+        'qqbot',
+        false,
+      );
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'qqdm:user_001',
+        expect.objectContaining({ timestamp: '2026-03-07T01:00:00.000Z' }),
+      );
+
+      await channel.disconnect();
+    });
   });
 
   describe('bot commands and outbound replies', () => {

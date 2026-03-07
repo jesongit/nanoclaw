@@ -192,6 +192,26 @@ describe('getMessagesSince', () => {
     expect(msgs[0].content).toBe('third');
   });
 
+  it('handles mixed timezone timestamps by absolute time', () => {
+    store({
+      id: 'm5',
+      chat_jid: 'group@g.us',
+      sender: 'Dave@s.whatsapp.net',
+      sender_name: 'Dave',
+      content: 'mixed timezone later message',
+      timestamp: '2026-03-07T03:11:53.000Z',
+    });
+
+    const msgs = getMessagesSince(
+      'group@g.us',
+      '2026-03-07T11:10:53+08:00',
+      'Andy',
+    );
+
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].id).toBe('m5');
+  });
+
   it('excludes bot messages via is_bot_message flag', () => {
     const msgs = getMessagesSince(
       'group@g.us',
@@ -291,6 +311,28 @@ describe('getNewMessages', () => {
     expect(messages[0].content).toBe('g1 msg2');
   });
 
+  it('returns later UTC messages after a +08:00 cursor', () => {
+    storeChatMetadata('tg:chat_1', '2026-03-07T03:11:53.000Z');
+    store({
+      id: 'tg-1',
+      chat_jid: 'tg:chat_1',
+      sender: 'telegram:user_1',
+      sender_name: 'Telegram User',
+      content: 'telegram later message',
+      timestamp: '2026-03-07T03:11:53.000Z',
+    });
+
+    const { messages, newTimestamp } = getNewMessages(
+      ['group1@g.us', 'group2@g.us', 'tg:chat_1'],
+      '2026-03-07T11:10:53+08:00',
+      'Andy',
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].id).toBe('tg-1');
+    expect(newTimestamp).toBe('2026-03-07T03:11:53.000Z');
+  });
+
   it('returns empty for no registered groups', () => {
     const { messages, newTimestamp } = getNewMessages([], '', 'Andy');
     expect(messages).toHaveLength(0);
@@ -328,6 +370,31 @@ describe('storeChatMetadata', () => {
     storeChatMetadata('group@g.us', '2024-01-01T00:00:01.000Z');
     const chats = getAllChats();
     expect(chats[0].last_message_time).toBe('2024-01-01T00:00:05.000Z');
+  });
+
+  it('preserves newer absolute time across mixed timestamp formats', () => {
+    storeChatMetadata('group@g.us', '2026-03-07T03:11:53.000Z');
+    storeChatMetadata('group@g.us', '2026-03-07T11:10:53+08:00');
+    const chats = getAllChats();
+    expect(chats[0].last_message_time).toBe('2026-03-07T03:11:53.000Z');
+  });
+
+  it('orders chats by absolute last message time', () => {
+    storeChatMetadata('qqdm:user_1', '2026-03-07T11:10:53+08:00', 'QQ DM');
+    storeChatMetadata('tg:chat_1', '2026-03-07T03:11:53.000Z', 'Telegram Chat');
+    storeChatMetadata(
+      'group@g.us',
+      '2026-03-07T03:09:53.000Z',
+      'WhatsApp Chat',
+    );
+
+    const chats = getAllChats();
+
+    expect(chats.map((chat) => chat.jid)).toEqual([
+      'tg:chat_1',
+      'qqdm:user_1',
+      'group@g.us',
+    ]);
   });
 });
 

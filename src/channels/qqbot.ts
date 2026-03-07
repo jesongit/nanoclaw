@@ -289,13 +289,24 @@ export class QQBotChannel implements Channel {
     }
   }
 
+  private normalizeInboundTimestamp(timestamp?: string): string {
+    if (!timestamp) return new Date().toISOString();
+
+    const parsed = new Date(timestamp);
+    if (Number.isNaN(parsed.getTime())) {
+      return new Date().toISOString();
+    }
+
+    return parsed.toISOString();
+  }
+
   private async handleInboundMessage(
     event: QQMessageEvent,
     isGroup: boolean,
     eventType: string,
   ): Promise<void> {
     const msgId = event.id || '';
-    const timestamp = event.timestamp || new Date().toISOString();
+    const timestamp = this.normalizeInboundTimestamp(event.timestamp);
     const author = event.author || {};
     const sender = isGroup
       ? author.member_openid || author.user_openid || ''
