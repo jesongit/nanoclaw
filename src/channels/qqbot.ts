@@ -302,16 +302,24 @@ export class QQBotChannel implements Channel {
       : author.user_openid || author.member_openid || '';
     const senderName =
       author.username || author.nickname || sender || 'Unknown User';
-    const chatId = isGroup ? event.group_openid || '' : author.user_openid || '';
+    const chatId = isGroup
+      ? event.group_openid || ''
+      : author.user_openid || '';
 
     if (!msgId || !chatId) {
-      logger.warn({ eventType, msgId, chatId }, 'QQBot event missing identifiers');
+      logger.warn(
+        { eventType, msgId, chatId },
+        'QQBot event missing identifiers',
+      );
       return;
     }
 
     const chatJid = isGroup ? `qqgrp:${chatId}` : `qqdm:${chatId}`;
     const chatName = isGroup ? `QQ Group ${chatId}` : senderName;
-    const rawContent = this.formatMessageContent(event.content || '', event.attachments);
+    const rawContent = this.formatMessageContent(
+      event.content || '',
+      event.attachments,
+    );
     const normalizedMessage = isGroup
       ? {
           content: this.ensureAssistantTrigger(rawContent),
@@ -325,7 +333,10 @@ export class QQBotChannel implements Channel {
     this.opts.onChatMetadata(chatJid, timestamp, chatName, 'qqbot', isGroup);
 
     if (this.isDuplicateInboundMessage(chatJid, msgId)) {
-      logger.debug({ chatJid, msgId, eventType }, 'Ignoring duplicate QQBot message');
+      logger.debug(
+        { chatJid, msgId, eventType },
+        'Ignoring duplicate QQBot message',
+      );
       return;
     }
 
@@ -479,7 +490,10 @@ export class QQBotChannel implements Channel {
       throw new Error(`QQBot API ${response.status}: ${errorText}`);
     }
 
-    logger.info({ jid, length: text.length, msgSeq: nextSeq }, 'QQBot message sent');
+    logger.info(
+      { jid, length: text.length, msgSeq: nextSeq },
+      'QQBot message sent',
+    );
   }
 
   private async getAccessToken(): Promise<string> {
@@ -497,7 +511,9 @@ export class QQBotChannel implements Channel {
     });
 
     if (!response.ok) {
-      throw new Error(`QQBot token API ${response.status}: ${await response.text()}`);
+      throw new Error(
+        `QQBot token API ${response.status}: ${await response.text()}`,
+      );
     }
 
     const data = (await response.json()) as {
@@ -506,7 +522,9 @@ export class QQBotChannel implements Channel {
     };
 
     if (!data.access_token || !data.expires_in) {
-      throw new Error('QQBot token response missing access_token or expires_in');
+      throw new Error(
+        'QQBot token response missing access_token or expires_in',
+      );
     }
 
     this.accessToken = {
@@ -610,7 +628,9 @@ registerChannel('qqbot', (opts: ChannelOpts) => {
   const webhookHost =
     process.env.QQBOT_WEBHOOK_HOST || envVars.QQBOT_WEBHOOK_HOST || '127.0.0.1';
   const webhookPath =
-    process.env.QQBOT_WEBHOOK_PATH || envVars.QQBOT_WEBHOOK_PATH || '/qqbot/webhook';
+    process.env.QQBOT_WEBHOOK_PATH ||
+    envVars.QQBOT_WEBHOOK_PATH ||
+    '/qqbot/webhook';
   const webhookPortRaw =
     process.env.QQBOT_WEBHOOK_PORT || envVars.QQBOT_WEBHOOK_PORT || '8080';
   const webhookPort = Number.parseInt(webhookPortRaw, 10);
@@ -620,7 +640,11 @@ registerChannel('qqbot', (opts: ChannelOpts) => {
     return null;
   }
 
-  if (!Number.isInteger(webhookPort) || webhookPort <= 0 || webhookPort > 65535) {
+  if (
+    !Number.isInteger(webhookPort) ||
+    webhookPort <= 0 ||
+    webhookPort > 65535
+  ) {
     logger.warn({ webhookPortRaw }, 'QQBot: invalid QQBOT_WEBHOOK_PORT');
     return null;
   }

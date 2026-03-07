@@ -72,7 +72,11 @@ function deriveKeyPair(appSecret: string) {
   return { publicKey, privateKey };
 }
 
-function signedHeaders(appSecret: string, body: string, timestamp = '1704067200') {
+function signedHeaders(
+  appSecret: string,
+  body: string,
+  timestamp = '1704067200',
+) {
   const { privateKey } = deriveKeyPair(appSecret);
   const signature = crypto
     .sign(null, Buffer.from(`${timestamp}${body}`, 'utf-8'), privateKey)
@@ -188,7 +192,10 @@ describe('QQBotChannel', () => {
 
   describe('factory', () => {
     it('self-registers qqbot factory', () => {
-      expect(registerChannelMock).toHaveBeenCalledWith('qqbot', expect.any(Function));
+      expect(registerChannelMock).toHaveBeenCalledWith(
+        'qqbot',
+        expect.any(Function),
+      );
       expect(qqbotFactory).toBeTypeOf('function');
     });
 
@@ -224,7 +231,13 @@ describe('QQBotChannel', () => {
 
   describe('connection lifecycle', () => {
     it('connects and disconnects cleanly', async () => {
-      const channel = new QQBotChannel('app_123', 'secret_123', createTestOpts(), '127.0.0.1', 0);
+      const channel = new QQBotChannel(
+        'app_123',
+        'secret_123',
+        createTestOpts(),
+        '127.0.0.1',
+        0,
+      );
 
       expect(channel.isConnected()).toBe(false);
       await channel.connect();
@@ -237,7 +250,13 @@ describe('QQBotChannel', () => {
 
   describe('webhook handling', () => {
     it('responds to callback validation', async () => {
-      const channel = new QQBotChannel('app_123', 'secret_123', createTestOpts(), '127.0.0.1', 0);
+      const channel = new QQBotChannel(
+        'app_123',
+        'secret_123',
+        createTestOpts(),
+        '127.0.0.1',
+        0,
+      );
       await channel.connect();
 
       const response = await postWebhook(channel, {
@@ -259,19 +278,21 @@ describe('QQBotChannel', () => {
 
     it('rejects signed events with invalid signature', async () => {
       const opts = createTestOpts();
-      const channel = new QQBotChannel('app_123', 'secret_123', opts, '127.0.0.1', 0);
+      const channel = new QQBotChannel(
+        'app_123',
+        'secret_123',
+        opts,
+        '127.0.0.1',
+        0,
+      );
       await channel.connect();
 
       const payload = createGroupAtEvent();
       const body = JSON.stringify(payload);
-      const response = await postWebhook(
-        channel,
-        payload,
-        {
-          'x-signature-ed25519': 'not-a-valid-signature',
-          'x-signature-timestamp': '1704067200',
-        },
-      );
+      const response = await postWebhook(channel, payload, {
+        'x-signature-ed25519': 'not-a-valid-signature',
+        'x-signature-timestamp': '1704067200',
+      });
 
       expect(response.statusCode).toBe(401);
       expect(JSON.parse(response.body)).toEqual({ error: 'invalid signature' });
@@ -283,12 +304,22 @@ describe('QQBotChannel', () => {
 
     it('stores metadata and message for @ group chat', async () => {
       const opts = createTestOpts();
-      const channel = new QQBotChannel('app_123', 'secret_123', opts, '127.0.0.1', 0);
+      const channel = new QQBotChannel(
+        'app_123',
+        'secret_123',
+        opts,
+        '127.0.0.1',
+        0,
+      );
       await channel.connect();
 
       const payload = createGroupAtEvent();
       const body = JSON.stringify(payload);
-      const response = await postWebhook(channel, payload, signedHeaders('secret_123', body));
+      const response = await postWebhook(
+        channel,
+        payload,
+        signedHeaders('secret_123', body),
+      );
 
       expect(response.statusCode).toBe(200);
       expect(JSON.parse(response.body)).toEqual({ op: 12 });
@@ -316,7 +347,13 @@ describe('QQBotChannel', () => {
 
     it('only handles @ group messages and ignores unrelated group event types', async () => {
       const opts = createTestOpts();
-      const channel = new QQBotChannel('app_123', 'secret_123', opts, '127.0.0.1', 0);
+      const channel = new QQBotChannel(
+        'app_123',
+        'secret_123',
+        opts,
+        '127.0.0.1',
+        0,
+      );
       await channel.connect();
 
       const payload = {
@@ -336,7 +373,11 @@ describe('QQBotChannel', () => {
         },
       };
       const body = JSON.stringify(payload);
-      const response = await postWebhook(channel, payload, signedHeaders('secret_123', body));
+      const response = await postWebhook(
+        channel,
+        payload,
+        signedHeaders('secret_123', body),
+      );
 
       expect(response.statusCode).toBe(200);
       expect(JSON.parse(response.body)).toEqual({ op: 12 });
@@ -348,7 +389,13 @@ describe('QQBotChannel', () => {
 
     it('only stores metadata for unregistered chats', async () => {
       const opts = createTestOpts({ registeredGroups: vi.fn(() => ({})) });
-      const channel = new QQBotChannel('app_123', 'secret_123', opts, '127.0.0.1', 0);
+      const channel = new QQBotChannel(
+        'app_123',
+        'secret_123',
+        opts,
+        '127.0.0.1',
+        0,
+      );
       await channel.connect();
 
       const payload = createGroupAtEvent({ group_openid: 'group_unknown' });
@@ -369,7 +416,13 @@ describe('QQBotChannel', () => {
 
     it('stores direct messages without prepending trigger', async () => {
       const opts = createTestOpts();
-      const channel = new QQBotChannel('app_123', 'secret_123', opts, '127.0.0.1', 0);
+      const channel = new QQBotChannel(
+        'app_123',
+        'secret_123',
+        opts,
+        '127.0.0.1',
+        0,
+      );
       await channel.connect();
 
       const payload = createDmEvent();
@@ -410,12 +463,22 @@ describe('QQBotChannel', () => {
         });
 
       const opts = createTestOpts();
-      const channel = new QQBotChannel('app_123', 'secret_123', opts, '127.0.0.1', 0);
+      const channel = new QQBotChannel(
+        'app_123',
+        'secret_123',
+        opts,
+        '127.0.0.1',
+        0,
+      );
       await channel.connect();
 
       const payload = createGroupAtEvent({ content: '/chatid' });
       const body = JSON.stringify(payload);
-      const response = await postWebhook(channel, payload, signedHeaders('secret_123', body));
+      const response = await postWebhook(
+        channel,
+        payload,
+        signedHeaders('secret_123', body),
+      );
 
       expect(response.statusCode).toBe(200);
       expect(fetchMock).toHaveBeenNthCalledWith(
@@ -428,7 +491,9 @@ describe('QQBotChannel', () => {
         'https://api.sgroup.qq.com/v2/groups/group_001/messages',
         expect.objectContaining({
           method: 'POST',
-          headers: expect.objectContaining({ Authorization: 'QQBot access_123' }),
+          headers: expect.objectContaining({
+            Authorization: 'QQBot access_123',
+          }),
           body: expect.stringContaining('Chat ID: `qqgrp:group_001`'),
         }),
       );
@@ -453,7 +518,13 @@ describe('QQBotChannel', () => {
           text: async () => '',
         });
 
-      const channel = new QQBotChannel('app_123', 'secret_123', createTestOpts(), '127.0.0.1', 0);
+      const channel = new QQBotChannel(
+        'app_123',
+        'secret_123',
+        createTestOpts(),
+        '127.0.0.1',
+        0,
+      );
       await channel.connect();
 
       const payload = createDmEvent({ content: '/ping' });
@@ -487,7 +558,13 @@ describe('QQBotChannel', () => {
           text: async () => '',
         });
 
-      const channel = new QQBotChannel('app_123', 'secret_123', createTestOpts(), '127.0.0.1', 0);
+      const channel = new QQBotChannel(
+        'app_123',
+        'secret_123',
+        createTestOpts(),
+        '127.0.0.1',
+        0,
+      );
       await channel.connect();
 
       const payload = createGroupAtEvent({ id: 'dup_ping', content: '/ping' });
@@ -513,15 +590,31 @@ describe('QQBotChannel', () => {
         .mockResolvedValueOnce({ ok: true, status: 200, text: async () => '' })
         .mockResolvedValueOnce({ ok: true, status: 200, text: async () => '' });
 
-      const channel = new QQBotChannel('app_123', 'secret_123', createTestOpts(), '127.0.0.1', 0);
+      const channel = new QQBotChannel(
+        'app_123',
+        'secret_123',
+        createTestOpts(),
+        '127.0.0.1',
+        0,
+      );
       await channel.connect();
 
-      const groupPayload = createGroupAtEvent({ content: 'first group message' });
+      const groupPayload = createGroupAtEvent({
+        content: 'first group message',
+      });
       const dmPayload = createDmEvent({ content: 'first dm message' });
       const groupBody = JSON.stringify(groupPayload);
       const dmBody = JSON.stringify(dmPayload);
-      await postWebhook(channel, groupPayload, signedHeaders('secret_123', groupBody));
-      await postWebhook(channel, dmPayload, signedHeaders('secret_123', dmBody));
+      await postWebhook(
+        channel,
+        groupPayload,
+        signedHeaders('secret_123', groupBody),
+      );
+      await postWebhook(
+        channel,
+        dmPayload,
+        signedHeaders('secret_123', dmBody),
+      );
 
       await channel.sendMessage('qqgrp:group_001', 'group reply');
       await channel.sendMessage('qqdm:user_001', 'dm reply');
@@ -529,7 +622,9 @@ describe('QQBotChannel', () => {
       expect(fetchMock).toHaveBeenNthCalledWith(
         2,
         'https://api.sgroup.qq.com/v2/groups/group_001/messages',
-        expect.objectContaining({ body: expect.stringContaining('group reply') }),
+        expect.objectContaining({
+          body: expect.stringContaining('group reply'),
+        }),
       );
       expect(fetchMock).toHaveBeenNthCalledWith(
         3,
@@ -543,7 +638,11 @@ describe('QQBotChannel', () => {
 
   describe('ownsJid', () => {
     it('owns qq group and dm JIDs only', () => {
-      const channel = new QQBotChannel('app_123', 'secret_123', createTestOpts());
+      const channel = new QQBotChannel(
+        'app_123',
+        'secret_123',
+        createTestOpts(),
+      );
       expect(channel.ownsJid('qqgrp:group_001')).toBe(true);
       expect(channel.ownsJid('qqdm:user_001')).toBe(true);
       expect(channel.ownsJid('tg:123')).toBe(false);
