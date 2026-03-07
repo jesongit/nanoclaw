@@ -1,0 +1,20 @@
+skill: qqbot
+version: 1.0.0
+description: "QQ Bot API v2 integration via webhook + OpenAPI"
+core_version: 0.1.0
+adds:
+  - src/channels/qqbot.ts
+  - src/channels/qqbot.test.ts
+modifies:
+  - src/channels/index.ts
+  - setup/verify.ts
+structured:
+  env_additions:
+    - QQBOT_APP_ID
+    - QQBOT_APP_SECRET
+    - QQBOT_WEBHOOK_HOST
+    - QQBOT_WEBHOOK_PORT
+    - QQBOT_WEBHOOK_PATH
+conflicts: []
+depends: []
+test: "npx vitest run src/channels/qqbot.test.ts src/ipc-auth.test.ts"
